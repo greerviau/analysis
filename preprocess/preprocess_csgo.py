@@ -7,6 +7,7 @@ import sys
 
 
 def detect_kill(frame, last_frame, indicator_zone: tuple):
+    #TODO: Make this more accurate at detecting kills
     frame_zone = frame[indicator_zone[0][0]:indicator_zone[0][1], indicator_zone[1][0]:indicator_zone[1][1], :]
     last_frame_zone = last_frame[indicator_zone[0][0]:indicator_zone[0][1], indicator_zone[1][0]:indicator_zone[1][1], :]
 
@@ -28,6 +29,7 @@ def detect_kill(frame, last_frame, indicator_zone: tuple):
     #print(frame_thresh_sum - last_frame_thresh_sum)
     if frame_thresh_sum - last_frame_thresh_sum > 250:
         print('Kill')
+        return True
 
     #cv2.imshow('indicator', frame_thresh*255)
     #cv2.imshow('last_indicator', last_frame_thresh*255)
@@ -70,7 +72,8 @@ def process_video(input_file, output_segments_path, out_resolution=None, out_fps
     cache_n_seconds = 3
     cached_frames = []
     cache_size = 3 * out_fps
-    rolling_index = 0
+
+    kill_skip = 0
 
     for i in range(skip_n_frames):
         _, _ = cap.read()
@@ -83,26 +86,25 @@ def process_video(input_file, output_segments_path, out_resolution=None, out_fps
             cv2.imshow('Frame',frame)
             if counter % frame_skip == 0:
                 processed_frame = process_frame(frame, out_resolution, zoom=3)
-                if detect_kill(frame, last_frame, ((0,500), (-300,-1))):
-                    out = cv2.VideoWriter(os.path.join(output_segments_path, 'segment_{:03d}.mp4'.format(segments_captured)), cv2.VideoWriter_fourcc(*'MP4V'), out_fps, out_resolution)
-                    
-                    for c_f in cached_frames:
-                        out.write(c_f)
+                if kill_skip <= 0:
+                    if detect_kill(frame, last_frame, ((0,500), (-300,-1))) and len(cached_frames) >= cache_size * .75:
+                        kill_skip = 10
+                        out = cv2.VideoWriter(os.path.join(output_segments_path, 'segment_{:03d}.mp4'.format(segments_captured)), cv2.VideoWriter_fourcc(*'MP4V'), out_fps, out_resolution)
+                        
+                        for c_f in cached_frames:
+                            out.write(c_f)
 
-                    cached_frames = []
-                    rolling_index = 0
-                    out.write(processed_frame)
-                    segments_captured += 1
-                    out.release()
-                else:
-                    if len(cached_frames) < cache_size:
-                        cached_frames.append(processed_frame)
+                        cached_frames = []
+                        rolling_index = 0
+                        out.write(processed_frame)
+                        segments_captured += 1
+                        out.release()
                     else:
-                        cached_frames[rolling_index] = processed_frame
-                        rolling_index += 1
-                        if rolling_index >= cache_size:
-                            rolling_index = 0
+                        cached_frames.append(processed_frame)
+                        if len(cached_frames) > cache_size:
+                            cached_frames.pop(0)
 
+                kill_skip -= 1
                 last_frame = frame
             counter += 1
 
