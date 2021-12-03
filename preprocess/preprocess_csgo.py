@@ -6,10 +6,10 @@ import os
 import sys
 
 
-def detect_kill(frame, last_frame, indicator_zone: tuple):
+def detect_kill(frame, avg_thresh, indicator_zone: tuple):
     #TODO: Make this more accurate at detecting kills
     frame_zone = frame[indicator_zone[0][0]:indicator_zone[0][1], indicator_zone[1][0]:indicator_zone[1][1], :]
-    last_frame_zone = last_frame[indicator_zone[0][0]:indicator_zone[0][1], indicator_zone[1][0]:indicator_zone[1][1], :]
+    #last_frame_zone = last_frame[indicator_zone[0][0]:indicator_zone[0][1], indicator_zone[1][0]:indicator_zone[1][1], :]
 
     frame_thresh = np.zeros_like(frame_zone)
     frame_zone_b = frame_zone[:, :, 0]
@@ -18,22 +18,31 @@ def detect_kill(frame, last_frame, indicator_zone: tuple):
     frame_thresh[(frame_zone_b < 100) & (frame_zone_g < 100) & (frame_zone_r > 160)] = 1
     frame_thresh_sum = float(np.sum(frame_thresh))
 
+    '''
     last_frame_thresh = np.zeros_like(last_frame_zone)
     last_frame_zone_b = last_frame_zone[:, :, 0]
     last_frame_zone_g = last_frame_zone[:, :, 1]
     last_frame_zone_r = last_frame_zone[:, :, 2]
     last_frame_thresh[(last_frame_zone_b < 80) & (last_frame_zone_g < 80) & (last_frame_zone_r > 140)] = 1
     last_frame_thresh_sum = float(np.sum(last_frame_thresh))
+    '''
 
-    #print(frame_thresh_sum, last_frame_thresh_sum)
-    #print(frame_thresh_sum - last_frame_thresh_sum)
-    if frame_thresh_sum - last_frame_thresh_sum > 250:
-        print('Kill')
-        return True
+    #print(frame_thresh_sum, avg_thresh)
+    #print(frame_thresh_sum - avg_thresh)
+    new_avg_thresh = 0
+    if avg_thresh > 0:
+        new_avg_thresh = (avg_thresh + frame_thresh_sum) / 2
+        if frame_thresh_sum - avg_thresh > 1600:
+            #print(frame_thresh_sum, avg_thresh)
+            #print(frame_thresh_sum - avg_thresh)
+            #print('Kill')
+            return True, new_avg_thresh
+    else:
+        new_avg_thresh = frame_thresh_sum
 
     #cv2.imshow('indicator', frame_thresh*255)
     #cv2.imshow('last_indicator', last_frame_thresh*255)
-    return False
+    return False, new_avg_thresh
 
 def process_video(input_file, output_segments_path, out_resolution=None, out_fps=-1):
     if not os.path.exists(output_segments_path):
@@ -69,9 +78,13 @@ def process_video(input_file, output_segments_path, out_resolution=None, out_fps
     skip_n_frames = native_fps * skip_first_n_seconds
     segments_captured = 1
 
-    cache_n_seconds = 3
+    cache_n_seconds = 2
     cached_frames = []
-    cache_size = 3 * out_fps
+    cache_size = cache_n_seconds * out_fps
+
+    visualize = False
+
+    avg_indicator_thresh = 0
 
     kill_skip = 0
 
@@ -83,13 +96,18 @@ def process_video(input_file, output_segments_path, out_resolution=None, out_fps
 
         ret, frame = cap.read()
         if ret:
-            cv2.imshow('Frame',frame)
             if counter % frame_skip == 0:
                 processed_frame = process_frame(frame, out_resolution, zoom=3)
+                #print(f'\rCached frames {len(cached_frames)} / {cache_size}', end='')
+                cached_frames.append(processed_frame)
+                if len(cached_frames) > cache_size:
+                    cached_frames.pop(0)
+                    
                 if kill_skip <= 0:
-                    if detect_kill(frame, last_frame, ((0,500), (-300,-1))) and len(cached_frames) >= cache_size * .75:
+                    kill_detected, avg_indicator_thresh = detect_kill(frame, avg_indicator_thresh, ((0,500), (-300,-1)))
+                    if kill_detected and len(cached_frames) >= cache_size * .75:
                         kill_skip = 10
-                        out = cv2.VideoWriter(os.path.join(output_segments_path, 'segment_{:03d}.mp4'.format(segments_captured)), cv2.VideoWriter_fourcc(*'MP4V'), out_fps, out_resolution)
+                        out = cv2.VideoWriter(os.path.join(output_segments_path, 'segment_{:03d}.mp4'.format(segments_captured)), cv2.VideoWriter_fourcc(*'mp4v'), out_fps, out_resolution)
                         
                         for c_f in cached_frames:
                             out.write(c_f)
@@ -99,17 +117,15 @@ def process_video(input_file, output_segments_path, out_resolution=None, out_fps
                         out.write(processed_frame)
                         segments_captured += 1
                         out.release()
-                    else:
-                        cached_frames.append(processed_frame)
-                        if len(cached_frames) > cache_size:
-                            cached_frames.pop(0)
+                #print(kill_skip)
 
                 kill_skip -= 1
-                last_frame = frame
             counter += 1
 
-            if cv2.waitKey(delay) & 0xFF == ord('q'):
-                break
+            if visualize:
+                cv2.imshow('Frame',frame)
+                if cv2.waitKey(delay) & 0xFF == ord('q'):
+                    break
         else:
             break
     cap.release()
@@ -130,5 +146,5 @@ if __name__ == '__main__':
     print(no_cheat)
     print(cheat)
 
-    for video in no_cheat:
-        process_video(os.path.join(RAW_DATA_PATH, video), os.path.join(PROCESSED_DATA_PATH, video.split('.')[0]), out_resolution=(640,480))
+    for video in video_files:
+        process_video(os.path.join(RAW_DATA_PATH, video), os.path.join(PROCESSED_DATA_PATH, video.split('.')[0]), out_resolution=(320,240))
